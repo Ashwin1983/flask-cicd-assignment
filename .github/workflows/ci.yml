@@ -1,4 +1,4 @@
-name: Flask CI Pipeline
+name: Flask CI/CD Pipeline
 
 on:
   push:
@@ -10,42 +10,18 @@ permissions:
   id-token: write
 
 jobs:
+
+  # ============================================================
+  # JOB 1: TEST
+  # ============================================================
   test:
-    name: Run Python Tests
+    name: Test Flask Application
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout source code
         uses: actions/checkout@v6
-      
-      - name: Inspect GitHub OIDC claims
-        env:
-          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
-          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
-        run: |
-          TOKEN=$(curl -sS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
-            | python -c "import sys,json; print(json.load(sys.stdin)['value'])")
-
-          PAYLOAD=$(echo "$TOKEN" | cut -d '.' -f 2)
-
-          python - "$PAYLOAD" <<'PY'
-          import sys
-          import base64
-          import json
-
-          payload = sys.argv[1]
-          payload += "=" * (-len(payload) % 4)
-
-          claims = json.loads(
-              base64.urlsafe_b64decode(payload)
-          )
-
-          print("OIDC subject (sub):", claims.get("sub"))
-          print("OIDC audience (aud):", claims.get("aud"))
-          print("OIDC issuer (iss):", claims.get("iss"))
-          PY
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -60,6 +36,23 @@ jobs:
       - name: Run pytest
         run: pytest -v
 
+
+  # ============================================================
+  # JOB 2: BUILD AND PUSH
+  # ============================================================
+  build-and-push:
+    name: Build and Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout source code
+        uses: actions/checkout@v6
+
+      # --------------------------------------------------------
+      # AWS Authentication using GitHub OIDC
+      # --------------------------------------------------------
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
@@ -67,4 +60,45 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Verify AWS identity
-        run: aws sts get-caller-identity
+        run: |
+          aws sts get-caller-identity
+
+      # --------------------------------------------------------
+      # Login to Amazon ECR
+      # --------------------------------------------------------
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # --------------------------------------------------------
+      # Define image variables
+      # --------------------------------------------------------
+      - name: Set Docker image variables
+        run: |
+          echo "IMAGE_TAG=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "ECR_REGISTRY=${{ steps.login-ecr.outputs.registry }}" >> "$GITHUB_ENV"
+
+      # --------------------------------------------------------
+      # Build Docker image
+      # --------------------------------------------------------
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG" \
+            .
+
+      # --------------------------------------------------------
+      # Push Docker image to ECR
+      # --------------------------------------------------------
+      - name: Push Docker image to ECR
+        run: |
+          docker push \
+            "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
+
+      # --------------------------------------------------------
+      # Display image information
+      # --------------------------------------------------------
+      - name: Display image information
+        run: |
+          echo "Docker image successfully pushed:"
+          echo "$ECR_REGISTRY/${{ vars.ECR_REPOSITORY }}:$IMAGE_TAG"
