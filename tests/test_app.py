@@ -24,7 +24,7 @@ def test_home_success(client):
 def test_health_success(client):
     response = client.get("/health")
 
-    assert response.status_code == 500
+    assert response.status_code == 200
 
     data = response.get_json()
 
