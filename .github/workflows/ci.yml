@@ -217,3 +217,159 @@ jobs:
 
           echo "Deployment timed out waiting for SSM."
           exit 1
+  
+  # ============================================================
+  # JOB 4: EMAIL NOTIFICATION
+  # ============================================================
+  notify:
+    name: Send Email Notification
+    if: ${{ always() }}
+    needs:
+      - test
+      - build-and-push
+      - deploy
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Determine pipeline result
+        id: result
+        env:
+          TEST_RESULT: ${{ needs.test.result }}
+          BUILD_RESULT: ${{ needs.build-and-push.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+        run: |
+          echo "Test result: $TEST_RESULT"
+          echo "Build/Push result: $BUILD_RESULT"
+          echo "Deploy result: $DEPLOY_RESULT"
+
+          if [ "$TEST_RESULT" != "success" ]; then
+            echo "status=FAILURE" >> "$GITHUB_OUTPUT"
+            echo "stage=TEST" >> "$GITHUB_OUTPUT"
+
+          elif [ "$BUILD_RESULT" != "success" ]; then
+            echo "status=FAILURE" >> "$GITHUB_OUTPUT"
+            echo "stage=BUILD / PUSH" >> "$GITHUB_OUTPUT"
+
+          elif [ "$DEPLOY_RESULT" != "success" ]; then
+            echo "status=FAILURE" >> "$GITHUB_OUTPUT"
+            echo "stage=DEPLOY" >> "$GITHUB_OUTPUT"
+
+          else
+            echo "status=SUCCESS" >> "$GITHUB_OUTPUT"
+            echo "stage=NONE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Send success email
+        if: ${{ steps.result.outputs.status == 'SUCCESS' }}
+        uses: dawidd6/action-send-mail@v18
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+
+          subject: "SUCCESS: Flask CI/CD Deployment - ${{ github.sha }}"
+
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_FROM }}
+
+          body: |
+            Flask CI/CD Deployment Successful
+
+            ==================================================
+            BUILD DETAILS
+            ==================================================
+
+            Repository:
+            ${{ github.repository }}
+
+            Branch:
+            ${{ github.ref_name }}
+
+            Commit SHA:
+            ${{ github.sha }}
+
+            Docker Image:
+            ${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+
+            EC2 Instance:
+            ${{ vars.EC2_INSTANCE_ID }}
+
+            Deployment Status:
+            SUCCESS
+
+            Health Check:
+            PASSED
+
+            ==================================================
+            PIPELINE
+            ==================================================
+
+            GitHub Actions Run:
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            ==================================================
+
+            The Docker image was successfully built, pushed
+            to Amazon ECR and deployed to the EC2 instance.
+
+      - name: Send failure email
+        if: ${{ steps.result.outputs.status == 'FAILURE' }}
+        uses: dawidd6/action-send-mail@v18
+        with:
+          server_address: ${{ secrets.MAIL_SERVER }}
+          server_port: ${{ secrets.MAIL_PORT }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+
+          subject: "FAILURE: Flask CI/CD Pipeline - ${{ steps.result.outputs.stage }}"
+
+          to: ${{ secrets.MAIL_TO }}
+          from: ${{ secrets.MAIL_FROM }}
+
+          body: |
+            Flask CI/CD Pipeline Failed
+
+            ==================================================
+            FAILURE DETAILS
+            ==================================================
+
+            Repository:
+            ${{ github.repository }}
+
+            Branch:
+            ${{ github.ref_name }}
+
+            Commit SHA:
+            ${{ github.sha }}
+
+            Failed Stage:
+            ${{ steps.result.outputs.stage }}
+
+            ==================================================
+            JOB RESULTS
+            ==================================================
+
+            Test:
+            ${{ needs.test.result }}
+
+            Build / Push:
+            ${{ needs.build-and-push.result }}
+
+            Deploy:
+            ${{ needs.deploy.result }}
+
+            ==================================================
+            PIPELINE
+            ==================================================
+
+            GitHub Actions Run:
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Please open the pipeline link above to investigate
+            the failed stage and review the logs.
+
+            ==================================================
